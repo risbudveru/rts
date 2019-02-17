@@ -17,6 +17,9 @@
 #define LSH_TOK_DELIM " \t\r\n\a"
 #define INITSIZE 256
 
+#include <sys/time.h>
+struct timeval tv;
+
 // Clearing the shell using escape sequences 
 #define clear() printf("\033[H\033[J")
 
@@ -24,6 +27,17 @@ static int log = 0;
 int shl_cd(char **args);
 int shl_help(char **args);
 int shl_exit(char **args);
+
+void myOwnTeeForSTDOUT() {
+
+    char buf[256] = {" "};
+    while(read(STDIN_FILENO, &buf, 64) > 0) {
+        int fd = open("foo.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        int sz = write(fd, buf, strlen(buf));
+        write(1, &buf, 64);
+        close(fd);
+    }
+}
 
 void viewoutlog(void) {
 
@@ -40,8 +54,6 @@ void viewoutlog(void) {
         printf ("%c", c);
         c = fgetc(fp);
     }
-    
-
 }
 
 void viewcmdlog(void) {
@@ -59,73 +71,61 @@ void viewcmdlog(void) {
         printf ("%c", c);
         c = fgetc(fp);
     }
-    
-
 }
 
 int threePipe(char **arg1, char **arg2, char **arg3) {
-  int i, status;
-  int pipes[4];
-  pipe(pipes); 
-  pipe(pipes + 2); 
+    
+    int i, status;
+    int pipes[4];
+    pipe(pipes); 
+    pipe(pipes + 2); 
  
-  if (fork() == 0)
-    {
+    if (fork() == 0) {
 
-      dup2(pipes[1], 1);
+        dup2(pipes[1], 1);
+        close(pipes[0]);
+        close(pipes[1]);
+        close(pipes[2]);
+        close(pipes[3]);
 
-      close(pipes[0]);
-      close(pipes[1]);
-      close(pipes[2]);
-      close(pipes[3]);
-
-      execvp(*arg1, arg1);
+        execvp(*arg1, arg1);
     }
-  else
-    {
-
-      if (fork() == 0)
-	{
+    else {
+        if (fork() == 0) {
 	  
-	  dup2(pipes[0], 0);
+	        dup2(pipes[0], 0);
+	        dup2(pipes[3], 1);
 
-	  dup2(pipes[3], 1);
+	        close(pipes[0]);
+	        close(pipes[1]);
+	        close(pipes[2]);
+	        close(pipes[3]);
 
-	  close(pipes[0]);
-	  close(pipes[1]);
-	  close(pipes[2]);
-	  close(pipes[3]);
-
-	  execvp(*arg2, arg2);
-	}
-      else
-	{
-
-	  if (fork() == 0)
-	    {
-
-	      dup2(pipes[2], 0);
-
-	      close(pipes[0]);
-	      close(pipes[1]);
-	      close(pipes[2]);
-	      close(pipes[3]);
-
-	      execvp(*arg3, arg3);
+	        execvp(*arg2, arg2);
 	    }
-	}
+        else {
+
+	        if (fork() == 0) {
+
+                dup2(pipes[2], 0);
+	            close(pipes[0]);
+	            close(pipes[1]);
+	            close(pipes[2]);
+	            close(pipes[3]);
+	            execvp(*arg3, arg3);
+	        }
+	    }
     }
   
-  close(pipes[0]);
-  close(pipes[1]);
-  close(pipes[2]);
-  close(pipes[3]);
+    close(pipes[0]);
+    close(pipes[1]);
+    close(pipes[2]);
+    close(pipes[3]);
 
-  for (i = 0; i < 3; i++)
-    wait(&status);
-  return 1;
+    for (i = 0; i < 3; i++)
+        wait(&status);
+    return 1;
 }
-
 
 int shell_execute_pipe(char **cmd1, char **cmd2) {
 
@@ -192,22 +192,22 @@ int shl_launch(char **args) {
     }
     pid = fork();
     if (pid == 0) {
-    // Child process
-    if (execvp(args[0], args) == -1) {
-        perror("ERROR");
-        exit(0);
-    }
-    exit(EXIT_FAILURE);
+    
+        if (execvp(args[0], args) == -1) {
+            perror("ERROR");
+            exit(0);
+        }
+
+        exit(EXIT_FAILURE);
     } 
+
     else if (pid < 0) {
-        // Error forking
         perror("ERROR");
         exit(0);
     } 
     else {
-        // Parent process
         do {
-        wpid = waitpid(pid, &status, WUNTRACED);
+            wpid = waitpid(pid, &status, WUNTRACED);
         } while (!WIFEXITED(status) && !WIFSIGNALED(status));
     }
     return 1;
@@ -222,8 +222,7 @@ int shl_num_builtins() {
     return sizeof(builtin_str) / sizeof(char *);
 }
 
-int shl_cd(char **args)
-{
+int shl_cd(char **args) {
     if (args[1] == NULL) {
         fprintf(stderr, "expected argument to \"cd\"\n");
     } 
@@ -235,25 +234,20 @@ int shl_cd(char **args)
     return 1;
 }
 
-int shl_help(char **args)
-{
+int shl_help(char **args) {
     int i;
 
     for (i = 0; i < shl_num_builtins(); i++) {
         printf("  %s\n", builtin_str[i]);
     }
-
-    printf("Use the man command for information on other programs.\n");
     return 1;
 }
 
-int shl_exit(char **args)
-{
+int shl_exit(char **args) {
     return 0;
 }
 
-char *shell_readline(void)
-{
+char *shell_readline(void) {
     char* line;
     ssize_t bufsize = 0; // have getline allocate a buffer for us
     getline(&line, &bufsize, stdin);
@@ -361,50 +355,55 @@ void init_loop() {
         printf("ownShell> ");
         line = shell_readline();
         
-        if(line[0] == 'l' && line[1] == 'o' && line[2] == 'g')  {    
+          if(strncmp(line, "log", 3) == 0) {
             log = 1;
-            fp = fopen("commands.log", "a+");
-            //f1 = fopen("output.log", "w");
+            fp = fopen("commands.log", "w");
+            f1 = fopen("output.log", "a+");
             fprintf(f1, "output logger started\n");
-            nf = fileno(f1);
-            f = dup(STDOUT_FILENO);
-            dup2(nf, STDOUT_FILENO);
+            //nf = fileno(f1);
+            //f = dup(STDOUT_FILENO);
+            //dup2(nf, STDOUT_FILENO);
+            
+            //UNSUCCESSFUL IMPLEMENTATION OF TEE
+
+            /*{
+                char buf[256];
+                read(1, &buf, 256);
+                int fd = open("foo.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+                //int sz = write(fd, buf, strlen(buf));
+                close(fd);
+            }*/
+
+            freopen("output.log", "a+", stdout);
+            fprintf(stdout, "\nTIMESTAMP : %lu\n", (unsigned long)time(NULL));  
             puts("LOGGING");
         }
 
         if(log == 1) {
             fprintf(fp, "%s\n", line);
-            if(l > 0)
-                dup2(l, 1);
-
         }
 
-        if( line[0] == 'v' && 
-            line[1] == 'i' && 
-            line[2] == 'e' &&
-            line[3] == 'w' && 
-            line[4] == 'c' && 
-            line[5] == 'm' &&
-            line[6] == 'd' && 
-            line[7] == 'l' && 
-            line[8] == 'o' &&
-            line[9] == 'g' ) 
-        {
-            puts("commands.log");
-            viewcmdlog();
-            puts("output.log");
-            viewoutlog();
+        if(strncmp(line, "viewcmdlog", 10) == 0) {
+            
+                puts("commands.log");
+                viewcmdlog();
         }
 
-        if(line[0] == 'u' && line[1] == 'n' && line[2] == 'l' && line[3] == 'o' && line[4] == 'g') {
+        if(strncmp(line, "viewoutlog", 10) == 0) {
+           
+                puts("output.log");
+                viewoutlog();
+        }
+
+        if(strncmp(line, "unlog", 5) == 0) {
             log = 0;
             puts("UNLOGGED");
+            freopen("/dev/tty", "a+", stdout);
             viewcmdlog();
+            viewoutlog();
             fp = fopen("commands.log", "w");
             fclose(fp);
-            dup2(f, STDOUT_FILENO);
             fflush(stdout);
-            close(f);
         }
 
         p = shell_pipe_parsed(line, pipedArgs);
@@ -419,31 +418,34 @@ void init_loop() {
             arg1 = shell_parse(pipedArgs[0]);
             arg2 = shell_parse(pipedArgs[1]);
         }
+
         else
             args = shell_parse(line);
-        
                 
-        if(p == 0)
+        if(p == 0 && strcmp(args[0], "") != 0)
             status = shell_execute(args);
-        if(p == 1)
+        if(p == 1 && strcmp(arg1[0], "") != 0 && strcmp(arg2[0], "") != 0)
             status = shell_execute_pipe(arg1, arg2);
-        if(p == 2) {
+        if(p == 2 && strcmp(arg1[0], "") != 0 && strcmp(arg2[0], "") != 0 && strcmp(arg3[0], "") != 0) 
             status = threePipe(arg1, arg2, arg3);
-        }
-        if(strcmp(args[0], "exit") == 0) {
+     
+        if(strcmp(args[0], "exit") == 0) 
             break;
-        }
-         
+        
+        //tee2("out.txt");
+
         free(line);
         free(args);
-  } while(status);
+
+    } while(status);
 }
 
 int main() {
     char temp[50];
     fgets(temp, sizeof(temp), stdin);
-    while(temp[0] != 'e' && temp[1] != 'n' && temp[2] != 't' && temp[3] != 'r' && temp[4] != 'y' ) {
-            printf("COMMAND LINE INTERPRETER NOT STARTED !!\n");
+    //while(temp[0] != 'e' && temp[1] != 'n' && temp[2] != 't' && temp[3] != 'r' && temp[4] != 'y' ) {
+    while(strncmp(temp, "entry", 5) != 0) {
+        printf("COMMAND LINE INTERPRETER NOT STARTED !!\n");
             fgets(temp, sizeof(temp), stdin);
             sleep(5);
             clear();
